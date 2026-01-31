@@ -1,0 +1,336 @@
+undef sql id
+column column_name format a30
+column data type form a20
+col sql_id form a15
+col owner form a15
+col table name form a30
+col table_owner form a25
+col index_name form a30
+col parsing_schema_name form a25
+col segment name form a25
+col index_type form a22
+col low v form a31
+col hi v form a31
+col data_default form a30
+col degree form a10
+col tablespace name form a20
+
+set verify off
+set lines 260 pages 30000 feed off
+break on table_name page
+
+alter session set nls_date_format='DD-MON-YY hh24:mi';|
+
+select * from v$version;
+
+select sysdate, instance_name, host_name, startup_time, DATABASE_STATUS, INSTANCE_ROLE from v$instance;
+
+-- To find different plans for the concerned sql
+
+*********************************************************
+
+PRO
+PRO === EXECUTION PLAN FROM CURSOR CACHE ===
+select * from table (dbms_xplan. display_cursor ('&&sql_id', null, 'ADVANCED -PROJECTION +OUTLINE +PREDICATE' ) ) ;
+
+PRO
+PRO === EXECUTION PLAN FROM AWR ===
+select * from table (dbms_xplan.display_awr ('&&sq1_id', null, null, 'ADVANCED -PROJECTION +OUTLINE +PREDICATE' ) ) ;
+
+PRO
+PRO === EXECUTION PLAN FROM AWR ===
+select * from table (dbms_xplan. display_awr ('&&sql_id', null, null, 'ADVANCED -PROJECTION +OUTLINE +PREDICATE' ) ) ;
+
+PRO
+PRO === EXECUTION PLAN FROM AWR for sqls with same signature but different sql_id ===
+select tf .*
+from (select plan_hash_value, (select sql_id from dba_hist_sqlstat where plan_hash_value=a.plan_hash_value and rownum<2) sql_id from
+
+select distinct plan_hash_value from dba_hist_sqlstat
+where force_matching_signature=(select force_matching_signature from dba_hist_sqlstat where sql_id='&&sql_id' and rownum<2)
+MINUS
+select distinct plan_hash_value from dba_hist_sqlstat where sql_id='&&sql_id'
+)a where rownum<11) ht,
+table (dbms_xplan. display_awr (ht.sql_id, ht.plan_hash_value, null, 'advanced -projection') ) tf;
+
+PRO
+PRO === STATS OF INVOLVED TABLES ===
+
+select a. table_name, a. owner, num_rows, degree, partitioned, last_analyzed, blocks, avg_row_len, pct_free, b.created, b.last_ddl_time, a. tablespace_name
+from dba_tables a, dba_objects b
+where a. table_name=b.object_name and a. owner=b.owner and b.object_type='TABLE' and
+(a. table_name, a.owner) in (select distinct object_name, object_owner from dba_hist_sql plan where object_type LIKE '#TABLE$' and sql_id='&&sql_id'
+UNION
+select distinct table_name, table_owner from dba_indexes where (index_name, owner) in
+(select object_name, object_owner from dba_hist_sql plan where object_type like '$INDEX$' and sql_id='&&sql_id' ) ) ;
+
+PRO === STATS OF INDEXES ON INVOLVED TABLES ===
+
+select table_owner, table_name, index_name, index_type, uniqueness, a.status, last_analyzed, distinct_keys,
+BLEVEL, LEAF_BLOCKS, CLUSTERING_FACTOR clu_fac, degree, b.created, b.last_ddl_time, a. tablespace_name
+from dba_indexes a, dba_objects b
+where a. index_name=b.object_name and a. owner=b.owner and b.object_type='INDEX' and
+(a. table_name, a. table_owner) in (select distinct object_name, object_owner from dba_hist_sql plan where object_type LIKE '#TABLE$' and sql_id='&&sql_id'
+UNION
+select distinct table_name, table_owner from dba_indexes where (index_name, owner) in
+(select object_name, object_owner from dba_hist_sql_plan where object_type like '%INDEX$' and sql_id='&&sql_id') )
+order by 1,2,3;
+
+PRO
+PRO === INDEX COLUMN INFORMATION ===
+select table_owner, table_name, index_name, column_name, column_position, descend from dba_ind_columns
+where (table_name, table_owner) in (select distinct object_name, object_owner from dba_hist_sql_plan where object_type LIKE '#TABLE$' and sql_id='&&sql_id'
+UNION
+select distinct table_name, table_owner from dba_indexes where (index_name, owner) in
+(select object_name, object_owner from dba_hist_sql_plan where object_type like '#INDEX$' and sql_id='&&sql_id' ) )
+
+order by 1,2, 3,5;
+
+PRO
+PRO === TABLE COLUMNS INFORMATION ===
+select owner, table_name, column_name, num_distinct, NUM_BUCKETS, num_nulls, nullable, data_type, decode (substr (data_type, 1, 9)
+, 'NUMBER', to_char (utl_raw.cast_to_number (low_value))
+, 'VARCHAR2',to_char (utl_raw.cast_to_varchar2 (low_value))
+, 'NVARCHAR2',to_char (utl_raw.cast_to_nvarchar2 (low_value))
+, 'CHAR',to_char (utl_raw.cast_to_varchar2 (low_value) )
+, 'BINARY_DO', to_char (utl_raw.cast_to_binary_double (low_value)) -- BINARY_DOUBLE
+, 'BINARY_FL' , to_char (utl_raw.cast_to_binary_float (low_value)) -- BINARY_FLOAT
+,'DATE', to_char (1780+to_number (substr (low_value, 1, 2) , 'XX')
+	+to_number (substr (low_value, 3, 2) , 'XX' )) || ' -'
+	||to_number (substr (low_value, 5, 2) , 'XX' ) || '-'
+	||to_number (substr (low_value, 7, 2) , 'XX' ) || ' '
+	||to_number (substr (low_value, 9, 2) , 'XX' ) -1) || ':'
+	||(to_number (substr (low_value, 11, 2) , 'XX' ) -1) || ' :'
+	||(to_number (substr (low_value, 13,2) , 'XX' ) -1)
+'TIMESTAMP', to_timestamp (											-- Any TIMESTAMP data_type
+	to_char ( to_number ( substr ( low_value, 1, 2 ) , 'xx' ) - 100, 'fm00' ) ||
+	to_char ( to_number ( substr ( low_value, 3, 2 ) , 'xx' ) - 100, 'fm00' ) ||
+	to_char ( to_number ( substr ( low_value, 5, 2 ) , 'xx' ) , 'fm00' ) ||
+	to_char ( to_number ( substr ( low_value, 7, 2 ) , 'xx' ), 'fm00' ) ||
+	to_char ( to_number ( substr ( low_value, 9, 2 ) , 'xx' ) -1, 'fm00' ) ||
+	to_char ( to_number ( substr ( low_value, 11, 2 ), 'xx' ) -1, 'fm00' ) ||
+	to_char ( to_number ( substr ( low_value, 13, 2 ), 'xx' ) -1, 'fm00' ) , 'yyyymmddhh24miss' ),
+low value
+	) low_v
+,decode(substr(data_type,1,9)
+, 'NUMBER', to_char (utl_raw.cast_to_number (high_value))
+, 'VARCHAR2',to_char (utl_raw.cast_to_varchar2 (high_value))
+, 'NVARCHAR2',to_char (utl_raw.cast_to_nvarchar2 (high_value)) -- NVARCHAR2 
+, 'CHAR',to_char (utl_raw.cast_to_varchar2 (high_value))
+, 'BINARY_DO', to_char (utl_raw.cast_to_binary_double (high_value)) -- BINARY_DOUBLE
+, 'BINARY_FL' , to_char (utl_raw.cast_to_binary_float (high_value)) -- BINARY_FLOAT
+,'DATE', to_char (1780+to_number (substr (high_value, 1, 2) , 'XX')
+	+to_number (substr (low_value, 3, 2) , 'XX' )) || ' -'
+	||to_number (substr (low_value, 5, 2) , 'XX' ) || '-'
+	||to_number (substr (low_value, 7, 2) , 'XX' ) || ' '
+	||to_number (substr (low_value, 9, 2) , 'XX' ) -1) || ':'
+	||(to_number (substr (low_value, 11, 2) , 'XX' ) -1) || ' :'
+	||(to_number (substr (low_value, 13,2) , 'XX' ) -1)
+'TIMESTAMP', to_timestamp (											-- Any TIMESTAMP data_type
+	to_char ( to_number ( substr ( high_value, 1, 2 ) , 'xx' ) - 100, 'fm00' ) ||
+	to_char ( to_number ( substr ( high_value, 3, 2 ) , 'xx' ) - 100, 'fm00' ) ||
+	to_char ( to_number ( substr ( high_value, 5, 2 ) , 'xx' ) , 'fm00' ) ||
+	to_char ( to_number ( substr ( high_value, 7, 2 ) , 'xx' ), 'fm00' ) ||
+	to_char ( to_number ( substr ( high_value, 9, 2 ) , 'xx' ) -1, 'fm00' ) ||
+	to_char ( to_number ( substr ( high_value, 11, 2 ), 'xx' ) -1, 'fm00' ) ||
+	to_char ( to_number ( substr ( high_value, 13, 2 ), 'xx' ) -1, 'fm00' ) , 'yyyymmddhh24miss' ),
+	high_value
+		) hi_v,data_default from dba_tab_cols
+	where (table_name,owner) in (select distinct object_name,object_owner from dba_hist_sql_plan where object_type like '%TABLE%' and sql_id='&&sql_id'
+								UNION
+								select distinct table_name, table_owner from dba_indexes where (index_name,owner) in
+								(select object_name,object_owner from dba_hist_sql_plan where object_type like '%TABLE%' and sql_id='&&sql_id'))
+order by 1,2,3;
+
+- To find per execution information for each day
+col tot_elaps heading 'Total | Elapsed'
+col elaps_per_exec heading 'Elaps| per ex'
+col cpu_per_exec heading 'CPU| per ex'
+col rows_per_exec heading 'Rows | per ex'
+col reads per_exec heading 'Reads | per ex'
+col read_reqs_per_exec heading 'Read Reqs | per ex'
+col gets per_exec heading 'GETS | per ex'
+col dirwrites per_exec heading 'DirWR| per ex'
+col iowaits per Exec heading 'IOwaits| per ex'
+col clwaits per_Exec heading 'CLwaits| per ex'
+col app_waits per_Exec heading 'APPwaits | per ex'
+col conc_waits per Exec heading 'CCWaits | per ex'
+col psn heading 'Parsing | Schema Name'
+col inst_id heading 'Inst | ID'
+col execs form 99999999
+col day form a9
+col psn form a15
+col inst id form 99
+col FIRST_LOAD TIME form a30
+break on inst_id page
+set lines 260 pages 30000 verify off
+
+PRO
+PRO === SQL EXECUTION STATISTICS from memory ===
+select inst_id, parsing_schema_name psn, sql_id, plan_hash_value phv, first_load_time, last_active_time, executions execs, round (elapsed_time/1000000, 3) tot_elaps,
+round (elapsed_time/executions/1000000, 3) elaps_per_exec, round (cpu_time/executions/1000000, 3) cpu_per_exec, round (rows_processed/executions, 3) rows_per_exec,
+round (disk_reads/executions) reads_per_exec, round (PHYSICAL_READ_REQUESTS/executions) read_reqs_per_exec,
+round (BUFFER_GETS/executions) gets_per_exec, round (DIRECT_WRITES/executions) dirwrites_per_exec, round (USER_IO_WAIT_TIME/1000000/executions) iowaits_per_Exec,
+round (CLUSTER_WAIT_TIME/1000000/executions) clwaits_per_Exec, round (APPLICATION_WAIT_TIME/1000000/executions) app_waits_per_Exec,
+round (CONCURRENCY_WAIT_TIME/1000000/executions) conc_waits_per_Exec
+from gv$sql
+where force_matching_signature=(select distinct force_matching_signature from v$sql where sql_id='&sql_id')
+order by 1,2,3,6
+
+PRO
+PRO === SQL EXECUTION STATISTICS GROUPED PER DAY ===
+select a. instance_number inst_id, b.parsing_schema_name psn, b.plan_hash_value phv, to_char (trunc (end_interval_time) , 'dd-Mon-yy' ) day,
+sum (executions_delta) execs, round (sum(elapsed_time_delta)/1000000, 3) tot_elaps,
+round (sum(elapsed_time_delta) /decode (sum(executions_delta) , 0, 1, sum(executions_delta) ) /1000000, 3) elaps_per_exec,
+round (sum(cpu_time_delta) /decode (sum(executions_delta) , 0, 1, sum (executions_delta) )/1000000, 3) cpu_per_exec,
+round (sum(rows_processed_delta) /decode (sum(executions_delta) , 0, 1, sum (executions_delta) ) , 0) rows_per_exec,
+round (sum(disk_reads_delta) /decode (sum(executions_delta) , 0, 1, sum (executions_delta) ) ) reads_per_exec,
+round (sum (PHYSICAL_READ_REQUESTS_DELTA) /decode (sum(executions_delta) , 0, 1, sum (executions_delta) ) ) read_reqs_per_exec,
+round (sum (buffer_gets_delta) /decode (sum(executions_delta) , 0, 1, sum (executions_delta) ) ) gets_per_exec,
+round (sum (DIRECT_WRITES_DELTA) /decode (sum(executions_delta) , 0, 1, sum (executions_delta) ) ) dirwrites_per_exec,
+round (sum (IOWAIT_DELTA) /decode (sum(executions_delta) , 0, 1, sum(executions_delta) ) /1000000, 3) iowaits_per_Exec,
+round (sum(CLWAIT_DELTA) /decode (sum(executions_delta), 0, 1, sum(executions_delta) ) /1000000, 3) clwaits_per_Exec,
+round (sum (APWAIT_DELTA) /decode (sum (executions_delta) , 0, 1, sum(executions_delta) ) /1000000, 3) app_waits_per_Exec,
+round (sum (CCWAIT_DELTA) /decode (sum(executions_delta) , 0, 1, sum (executions_delta) ) /1000000, 3) conc_waits_per_Exec
+from dba_hist_snapshot a, dba_hist_sqlstat b
+where a. snap_id=b.snap_id and a.instance_number=b.instance_number and b.sql_id='&sql_id'
+group by a. instance_number, b.sql_id, b.parsing_schema_name, b.plan_hash_value, trunc(end_interval_time)
+order by 1,2, trunc (end_interval_time), 3;		
+	
+-- To find information for each snap when the sql was running
+
+col snap_time form a15
+col snap_time heading 'Snap| Time'
+col snap_id heading 'Snap| ID'
+
+PRO
+PRO === SQL EXECUTION STATISTICS PER AWR SNAP ===
+select b.instance_number inst_id, b.parsing_schema_name psn, b.plan_hash_value phv,
+to_char (end_interval_time, 'dd-mon-yy hh24:mi' ) snap_time, a. snap_id, executions_delta execs,
+round (ELAPSED_TIME_DELTA/decode (executions_delta, 0, 1, executions_delta) /1000000, 3) elaps_per_Exec,
+round (CPU_TIME_DELTA/decode (executions_delta, 0, 1, executions_delta) /1000000, 3) cpu_per_Exec,
+round (ROWS_PROCESSED_DELTA/decode (executions_delta, 0, 1, executions_delta) , 0) rows_per_Exec,
+round (DISK_READS_DELTA/decode (executions_delta, 0, 1, executions_delta) , 0) reads_per_exec,
+round (PHYSICAL_READ_REQUESTS_DELTA/decode (executions_delta, 0, 1, executions_delta) , 0) read_reqs_per_exec,
+round (BUFFER_GETS_DELTA/decode (executions_delta, 0, 1, executions_delta) , 0) gets_per_exec,
+round (DIRECT_WRITES_DELTA/decode (executions_delta, 0, 1, executions_delta) , 3) dirwrites_per_Exec,
+round (IOWAIT_DELTA/decode (executions_delta, 0, 1, executions_delta) /1000000, 3) iowaits_per_Exec,
+round (CLWAIT_DELTA/decode (executions_delta, 0, 1, executions_delta) /1000000, 3) clwaits_per_Exec,
+round (APWAIT_DELTA/decode (executions_delta, 0, 1, executions_delta) /1000000, 3) app_waits_per_Exec,
+round (CCWAIT_DELTA/decode (executions_delta, 0, 1, executions_delta) /1000000, 3) conc_waits_per_Exec
+from dba_hist_snapshot a, dba_hist_sqlstat b
+where a.snap_id=b.snap_id and a. instance_number=b. instance_number and b.sql_id='&sql_id' -- and end_interval_time>sysdate-3
+order by 1,2, end_interval_time, 3;
+
+-- To find per execution information for each day grouped by signature
+PRO
+PRO === SQL EXECUTION STATISTICS PER DAY FOR ALL SQLS SHARING THE SQL SIGNATURE ===
+select a. instance_number inst_id, b.parsing_schema_name psn, b.plan_hash_value phv, to_char (trunc (end_interval_time) , 'dd-Mon-yy') day,
+count (distinct sql_id) dist_sqls,
+sum (executions_delta) execs, round (sum(elapsed_time_delta) /1000000,3) tot_elaps,
+round (sum(elapsed_time_delta) /decode (sum(executions_delta) , 0, 1, sum (executions_delta) ) /1000000, 3) elaps_per_exec,
+round (sum(cpu_time_delta) /decode (sum(executions_delta) , 0, 1, sum (executions_delta) ) /1000000, 3) cpu_per_exec,
+round (sum(rows_processed_delta) /decode (sum(executions_delta) , 0, 1, sum (executions_delta) ) , 3) rows_per_exec,
+round (sum(disk_reads_delta) /decode (sum(executions_delta) , 0, 1, sum (executions_delta) ) ) reads_per_exec,
+round (sum (PHYSICAL_READ_REQUESTS_DELTA) /decode (sum (executions_delta) , 0, 1, sum (executions_delta) ) ) read_reqs_per_exec,
+round (sum (buffer_gets_delta) /decode (sum(executions_delta) , 0, 1, sum (executions_delta) ) ) gets_per_exec,
+round (sum (DIRECT_WRITES_DELTA) /decode (sum (executions_delta) , 0, 1, sum(executions_delta) ) ) dirwrites_per_exec,
+round (sum (IOWAIT_DELTA) /decode (sum(executions_delta) , 0, 1, sum (executions_delta) ) /1000000, 3) iowaits_per_Exec,
+round (sum(CLWAIT_DELTA) /decode (sum (executions_delta) , 0, 1, sum (executions_delta) ) /1000000, 3) clwaits_per_Exec,
+round (sum (APWAIT_DELTA) /decode (sum (executions_delta) , 0, 1, sum(executions_delta) ) /1000000, 3) app_waits_per_Exec,
+round (sum(CCWAIT_DELTA) /decode (sum(executions_delta) , 0, 1, sum (executions_delta) ) /1000000, 3) conc_waits_per_Exec
+from dba_hist_snapshot a, dba_hist_sqlstat b
+where a.snap_id=b.snap_id and a. instance_number=b.instance_number and
+b.force_matching_signature=(select distinct force_matching_signature from dba_hist_sqlstat where sql_id='&sql_id')
+group by a. instance_number, b.parsing_schema_name, b.plan_hash_value, trunc(end_interval_time)
+order by 1,2, trunc (end_interval_time) , 3;
+
+-- ASH samples for each plan step each day
+col minsamp form a27
+col maxsamp form a27
+col samp_time form a19
+col SQL_PLAN_OPERATION form a35
+set lines 260 pages 30000
+break on samp_time page
+
+alter session set nls_date_format='dd-mon-yyyy hh24:mi';
+
+PRO
+PRO === ASH SAMPLES PER DAY ===
+select trunc (sample_time) samp_time, sql_plan_hash_value, sql_plan_line_id, sql_plan_operation, count (*),
+min (sample_time) minsamp, max (sample_time) maxsamp, count (distinct session_id| | session_serial# | | sql_exec_id) dist_execs
+from dba_hist_active_Sess_history
+where sql_id='&sql_id'
+group by trunc(sample_time) , sql_plan_hash_value, sql_plan_line_id, sql_plan_operation
+order by 1,2,3;
+
+-- Bind values used
+col name form a20
+col value_string form a30
+
+PRO
+PRO === BIND VALUES USED BY THIS SQL IN LAST ONE DAY ===
+select a. instance_number inst_id, to_char (end_interval_time, 'dd-mon-yy hh24:mi') snap_time, last_captured, name, position, value_string
+from dba_hist_sqlbind a, dba_hist_snapshot b
+where a.snap_id=b.snap_id and a. instance_number=b. instance_number and a.sql_id='&sql_id' and value_string is not null and b.end_interval_time>sysdate-1
+order by end_interval_time, last_captured, position;
+
+-- SQL Monitor info
+PRC
+PRO === SQL MONITOR REPORT ===
+SET LONG 1000000 LONGCHUNKSIZE 1000000 LINESIZE 260 pages 30000
+SELECT DBMS_SQLTUNE. report_sql_monitor (sql_id=>'&sql_id', type=> 'TEXT' , report_level => 'ALL' ) AS report FROM dual;
+
+-- Automatic sql tuning info
+var report clob;
+set serveroutput on verify off lines 260 pages 30000 long 400000
+
+declare
+cursor cl is select distinct execution_name, object_id from dba_advisor_actions
+				where (object_id, execution_name) in (select object_id, execution_name from dba_advisor_objects
+														where attr1='&sql_id' and task_name='SYS_AUTO_SQL_TUNING_TASK' ) ;
+
+db_version varchar2 (10);
+begin
+select version into db_version from v$instance;
+if (db_version>'11.2') then
+	for r in cl loop
+	:report := DBMS_AUTO_SQLTUNE. REPORT_AUTO_TUNING_TASK (r. execution_name, r. execution_name, object_id=>r. object_id) ;
+	end loop;
+else
+	:report := 'This database version does not support automatic sql tuning';
+end if;
+end;
+/
+
+PRO
+PRO === SQL TUNING ADVISOR REPORT ===
+print report
+
+col partition_name form a30
+col segment_type form a25
+-- To find table/index details of all the tables/indexes present in the plan for the concerned sql_id
+PRO
+PRO === SEGMENT SIZES FROM DBA_SEGMENTS. CTRL C IF THIS IS TAKING VERY LONG TIME ===
+select segment_name, partition_name, owner, segment_type, bytes/1024/1024 mbs from dba_segments
+where (segment_name, owner) in (select distinct object_name, object_owner from dba_hist_sql_plan where object_type LIKE '\TABLE$' and sql_id='&&sql_id'
+							UNION
+							select distinct table_name, table_owner from dba_indexes where (index_name, owner) in
+								(select object_name, object_owner from dba_hist_sql_plan where object_type like '$INDEX$' and sql_id='&&sql_id')
+							UNION
+							select object_name, object_owner from dba_hist_sql plan where object_type like '$INDEX$' and sql_id='&&sql_id') ;
+
+---
+---In case the column info fails with ORA-29275 (partial multibyte character) below gives atleast basic (no loval hival) column info
+---
+
+PRO
+PRO === COLUMN STATISTISC AGAIN IN CASE THE PREVIOUS COLUMN INFO HAD FAILED WITH ORA-29275 ===
+select owner, table_name, column_name, num_distinct, NUM_BUCKETS, num_nulls, nullable, data_type, data_default from dba_tab_cols
+where (table_name, owner) in (select distinct object_name, object_owner from dba_hist_sql plan where object_type LIKE '\TABLE$' and sql_id='&&sql_id'
+							UNION
+							select distinct table_name, table_owner from dba_indexes where (index_name, owner) in
+							(select object_name, object_owner from dba_hist_sql plan where object_type like '%INDEX$' and sql_id='&&sql_id' ))
+order by 1,2,3;
+
+select 'Finished with sql id &&sql_id' a from dual;
